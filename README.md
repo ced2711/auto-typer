@@ -1,6 +1,6 @@
 # Auto Typer
 
-A tiny Windows app (about 17 KB, no install, no dependencies) that types a block of text into any window as if it were typed on the keyboard, at a speed you control.
+A tiny Windows app (about 45 KB, no install, no dependencies) that types a block of text into any window as if it were typed on the keyboard, at a speed you control.
 
 ## Features
 
@@ -12,7 +12,9 @@ A tiny Windows app (about 17 KB, no install, no dependencies) that types a block
 - Global hotkeys: **F9** start / pause / resume, **F10** stop
 - Optional Shift+Enter for newlines, so chat apps don't send each line
 - Pauses automatically if Auto Typer itself has focus, so it never types into its own window
-- Always-on-top option, progress bar and time estimate
+- Highlights the part already typed, with a progress bar and time left
+- Clean dark interface that stays sharp at any display scale; English or 中文
+- Always-on-top option; settings are remembered in `%APPDATA%\AutoTyper\settings.ini`
 
 ## Download
 
@@ -32,7 +34,7 @@ Get `AutoTyper.exe` from the [latest release](../../releases/latest) and run it.
 
 ## Building from source
 
-Run `build.bat`. It compiles `AutoTyper.cs` with the C# compiler that ships with Windows (`csc.exe` from .NET Framework 4.x), so nothing else needs to be installed.
+Run `build.bat`. It compiles `AutoTyper.cs` (twice: the first build draws the icon, the second embeds it) with the C# compiler that ships with Windows (`csc.exe` from .NET Framework 4.x), so nothing else needs to be installed.
 
 ## License
 
