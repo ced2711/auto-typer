@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -267,10 +268,11 @@ static class Logo
 // Saved in %APPDATA%\AutoTyper\settings.ini.
 class Settings
 {
-    public int Speed = 300, Jitter = 30, Delay = 3, PauseMs = 150;
+    public const int MaxPauseMs = 20000, MinWidth = 660, MinHeight = 620;
+    public int Speed = 300, Jitter = 30, Delay = 3, PauseMs = 150, SpaceMs = 0, SpaceChance = 100;
     public bool ShiftEnter, TopMost;
     public string Language = "en";
-    public int Width = 780, Height = 580;
+    public int Width = 780, Height = 680;
 
     static string FilePath
     {
@@ -295,12 +297,14 @@ class Settings
                     case "speed": if (isNum) s.Speed = Clamp(n, 10, 3000); break;
                     case "jitter": if (isNum) s.Jitter = Clamp(n, 0, 90); break;
                     case "countdown": if (isNum) s.Delay = Clamp(n, 0, 30); break;
-                    case "pause": if (isNum) s.PauseMs = Clamp(n, 0, 1000); break;
+                    case "pause": if (isNum) s.PauseMs = Clamp(n, 0, MaxPauseMs); break;
+                    case "spacePause": if (isNum) s.SpaceMs = Clamp(n, 0, MaxPauseMs); break;
+                    case "spaceChance": if (isNum) s.SpaceChance = Clamp(n, 0, 100); break;
                     case "shiftEnter": s.ShiftEnter = v == "1"; break;
                     case "topMost": s.TopMost = v == "1"; break;
                     case "language": s.Language = v == "zh" ? "zh" : "en"; break;
-                    case "width": if (isNum) s.Width = Clamp(n, 660, 4000); break;
-                    case "height": if (isNum) s.Height = Clamp(n, 520, 3000); break;
+                    case "width": if (isNum) s.Width = Clamp(n, MinWidth, 4000); break;
+                    case "height": if (isNum) s.Height = Clamp(n, MinHeight, 3000); break;
                 }
             }
         }
@@ -317,6 +321,8 @@ class Settings
             sb.AppendLine("jitter=" + Jitter);
             sb.AppendLine("countdown=" + Delay);
             sb.AppendLine("pause=" + PauseMs);
+            sb.AppendLine("spacePause=" + SpaceMs);
+            sb.AppendLine("spaceChance=" + SpaceChance);
             sb.AppendLine("shiftEnter=" + (ShiftEnter ? 1 : 0));
             sb.AppendLine("topMost=" + (TopMost ? 1 : 0));
             sb.AppendLine("language=" + Language);
@@ -395,7 +401,7 @@ class El
     public Action<int> SetI;
     public Func<int, string> Fmt;
     public int Min, Max, Snap = 1;
-    public bool Log, Primary;
+    public bool Log, Curve, Primary;
     public Action Click;
 
     public bool Interactive
@@ -410,24 +416,30 @@ class El
     public float Frac(int v)
     {
         if (Log) return (float)(Math.Log(v / (double)Min) / Math.Log(Max / (double)Min));
+        if (Curve) return (float)Math.Sqrt((v - Min) / (double)(Max - Min));
         return (v - Min) / (float)(Max - Min);
     }
 
     public int FromFrac(float f)
     {
         f = Math.Max(0, Math.Min(1, f));
-        double v = Log ? Min * Math.Pow(Max / (double)Min, f) : Min + f * (Max - Min);
-        int snap = Log ? LogStep((int)v) : Snap;
+        double v = Log ? Min * Math.Pow(Max / (double)Min, f)
+                 : Curve ? Min + f * f * (Max - Min)
+                 : Min + f * (Max - Min);
+        int snap = Log ? LogStep((int)v) : Curve ? CurveStep((int)v) : Snap;
         return Settings.Clamp((int)(Math.Round(v / snap) * snap), Min, Max);
     }
 
     // Rounder steps as the numbers grow, so a log slider lands on tidy values.
     public static int LogStep(int v) { return v < 100 ? 5 : v < 1000 ? 10 : 50; }
 
+    // Steps for the squared pause sliders (milliseconds): fine below a second, coarse up to 20 s.
+    public static int CurveStep(int v) { return v < 1000 ? 10 : v < 5000 ? 50 : 250; }
+
     public int Wheel(int dir)
     {
         int v = GetI();
-        int step = Log ? LogStep(dir > 0 ? v : v - 1) : Snap;
+        int step = Log ? LogStep(dir > 0 ? v : v - 1) : Curve ? CurveStep(dir > 0 ? v : v - 1) : Snap;
         return Settings.Clamp(v + dir * step, Min, Max);
     }
 }
@@ -440,6 +452,7 @@ class MainForm : Form
     const int HOTKEY_TOGGLE = 1;
     const int HOTKEY_STOP = 2;
     const string PauseChars = "，。！？；：、,.!?;:\n";
+    const string SpaceChars = " \u3000";
 
     readonly Settings st = Settings.Load();
     float scale = 1;
@@ -460,7 +473,7 @@ class MainForm : Form
     readonly ManualResetEvent go = new ManualResetEvent(true);
     readonly Random rnd = new Random();
     volatile bool stopFlag, paused, needCountdown, shiftEnter;
-    volatile int speed, jitter, delaySec, pauseMs;
+    volatile int speed, jitter, delaySec, pauseMs, spaceMs, spaceChance;
     IntPtr myHandle;
 
     bool Busy { get { return state != State.Idle; } }
@@ -474,6 +487,8 @@ class MainForm : Form
         jitter = st.Jitter;
         delaySec = st.Delay;
         pauseMs = st.PauseMs;
+        spaceMs = st.SpaceMs;
+        spaceChance = st.SpaceChance;
         shiftEnter = st.ShiftEnter;
 
         Text = "Auto Typer";
@@ -553,7 +568,7 @@ class MainForm : Form
                                  "在这里输入或粘贴要自动输入的文字…\r\n\r\n支持任何语言、emoji、换行和 Tab。");
         txt.Invalidate();
         MinimumSize = Size.Empty;
-        MinimumSize = SizeFromClientSize(new Size(S(660), S(520)));
+        MinimumSize = SizeFromClientSize(new Size(S(Settings.MinWidth), S(Settings.MinHeight)));
         SetIcons();
         Rebuild();
     }
@@ -635,8 +650,12 @@ class MainForm : Form
                   v => "±" + v + "%");
         AddSlider(L, ref y, sx, sw, Lang.T("Countdown", "倒计时"), () => delaySec, v => delaySec = v, 0, 30, 1, false,
                   v => v + Lang.T(" s", " 秒"));
-        AddSlider(L, ref y, sx, sw, Lang.T("Pause after punctuation", "标点后停顿"), () => pauseMs, v => pauseMs = v, 0, 1000, 10, false,
-                  v => v + " ms");
+        AddSlider(L, ref y, sx, sw, Lang.T("Pause after punctuation", "标点后停顿"), () => pauseMs, v => pauseMs = v,
+                  0, Settings.MaxPauseMs, 0, false, PauseText, true);
+        AddSlider(L, ref y, sx, sw, Lang.T("Pause after spaces", "空格后停顿"), () => spaceMs, v => spaceMs = v,
+                  0, Settings.MaxPauseMs, 0, false, PauseText, true);
+        AddSlider(L, ref y, sx, sw, Lang.T("Chance of a space pause", "空格停顿概率"), () => spaceChance, v => spaceChance = v,
+                  0, 100, 5, false, v => v + "%");
         y += S(2);
         L.Add(new El { Kind = Kind.Sep, R = new Rectangle(side.X, y, side.Width, 1) });
         y += S(10);
@@ -671,13 +690,20 @@ class MainForm : Form
         return TextRenderer.MeasureText(s, f, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
     }
 
+    // Milliseconds as "250 ms", or "1.5 s" from one second up.
+    static string PauseText(int ms)
+    {
+        if (ms < 1000) return ms + " ms";
+        return (ms / 1000.0).ToString("0.##", CultureInfo.InvariantCulture) + Lang.T(" s", " 秒");
+    }
+
     void AddSlider(List<El> L, ref int y, int x, int w, string label, Func<int> get, Action<int> set,
-                   int min, int max, int snap, bool log, Func<int, string> fmt)
+                   int min, int max, int snap, bool log, Func<int, string> fmt, bool curve = false)
     {
         L.Add(new El { Kind = Kind.Text, R = new Rectangle(x, y, w, S(20)), Text = label, F = fBody, C = Ui.Fg, GetI = get, Fmt = fmt });
         y += S(22);
         L.Add(new El { Kind = Kind.Slider, R = new Rectangle(x, y, w, S(20)), GetI = get, SetI = set,
-                       Min = min, Max = max, Snap = Math.Max(snap, 1), Log = log });
+                       Min = min, Max = max, Snap = Math.Max(snap, 1), Log = log, Curve = curve });
         y += S(20) + S(12);
     }
 
@@ -890,20 +916,26 @@ class MainForm : Form
 
     // ---------- status ----------
 
-    static int CountChars(string t, out int pauses)
+    static int CountChars(string t, out int pauses, out int spaces)
     {
         int n = 0;
         pauses = 0;
+        spaces = 0;
         foreach (char c in t)
         {
             if (char.IsLowSurrogate(c)) continue;
             n++;
             if (PauseChars.IndexOf(c) >= 0) pauses++;
+            if (SpaceChars.IndexOf(c) >= 0) spaces++;
         }
         return n;
     }
 
-    double Seconds(int chars, int pauses) { return chars * 60.0 / speed + pauses * pauseMs / 1000.0; }
+    // Space pauses are random, so the estimate uses their average.
+    double Seconds(int chars, int pauses, int spaces)
+    {
+        return chars * 60.0 / speed + pauses * pauseMs / 1000.0 + spaces * (spaceMs / 1000.0) * (spaceChance / 100.0);
+    }
 
     static string Duration(double sec)
     {
@@ -914,10 +946,10 @@ class MainForm : Form
 
     void UpdateInfo()
     {
-        int p;
-        int n = CountChars(txt.Text.Replace("\r\n", "\n"), out p);
+        int p, sp;
+        int n = CountChars(txt.Text.Replace("\r\n", "\n"), out p, out sp);
         info = n == 0 ? Lang.T("No text yet", "还没有文字")
-                      : string.Format(Lang.T("{0} characters  ·  about {1}", "{0} 个字符  ·  约 {1}"), n, Duration(Seconds(n, p)));
+                      : string.Format(Lang.T("{0} characters  ·  about {1}", "{0} 个字符  ·  约 {1}"), n, Duration(Seconds(n, p, sp)));
     }
 
     void SetStatus(string s, Color c)
@@ -1001,8 +1033,8 @@ class MainForm : Form
 
     void Work(string t)
     {
-        int total = t.Length, pausesLeft;
-        int totalChars = CountChars(t, out pausesLeft);
+        int total = t.Length, pausesLeft, spacesLeft;
+        int totalChars = CountChars(t, out pausesLeft, out spacesLeft);
         int i = 0, doneChars = 0, newlines = 0;
 
         while (i < total)
@@ -1045,8 +1077,10 @@ class MainForm : Form
             doneChars++;
             bool isPause = PauseChars.IndexOf(c) >= 0;
             if (isPause) pausesLeft--;
+            bool isSpace = SpaceChars.IndexOf(c) >= 0;
+            if (isSpace) spacesLeft--;
 
-            int done = i, chars = doneChars, sel = i + newlines, left = pausesLeft;
+            int done = i, chars = doneChars, sel = i + newlines, left = pausesLeft, spLeft = spacesLeft;
             UI(delegate
             {
                 progress = done / (float)total;
@@ -1054,13 +1088,14 @@ class MainForm : Form
                 txt.ScrollToCaret();
                 if (!paused && !stopFlag)
                     SetStatus(string.Format(Lang.T("Typing  {0} / {1}  ·  {2} left", "正在输入  {0} / {1}  ·  还剩 {2}"),
-                                            chars, totalChars, Duration(Seconds(totalChars - chars, left))), Ui.Accent);
+                                            chars, totalChars, Duration(Seconds(totalChars - chars, left, spLeft))), Ui.Accent);
                 Invalidate();
             });
 
             double baseMs = 60000.0 / speed;
             double ms = baseMs * (1 + jitter / 100.0 * (rnd.NextDouble() * 2 - 1));
             if (isPause) ms += pauseMs;
+            if (isSpace && spaceMs > 0 && rnd.Next(100) < spaceChance) ms += spaceMs;
             SleepChecked((int)Math.Max(ms, 1));
         }
 
@@ -1134,7 +1169,7 @@ class MainForm : Form
             SetScale((m.WParam.ToInt32() & 0xFFFF) / 96f);
             MinimumSize = Size.Empty;
             Bounds = new Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
-            MinimumSize = SizeFromClientSize(new Size(S(660), S(520)));
+            MinimumSize = SizeFromClientSize(new Size(S(Settings.MinWidth), S(Settings.MinHeight)));
             return;
         }
         base.WndProc(ref m);
@@ -1147,6 +1182,8 @@ class MainForm : Form
         st.Jitter = jitter;
         st.Delay = delaySec;
         st.PauseMs = pauseMs;
+        st.SpaceMs = spaceMs;
+        st.SpaceChance = spaceChance;
         st.ShiftEnter = shiftEnter;
         st.TopMost = TopMost;
         if (WindowState == FormWindowState.Normal)

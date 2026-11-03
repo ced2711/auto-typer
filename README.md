@@ -7,7 +7,8 @@ A tiny Windows app (about 45 KB, no install, no dependencies) that types a block
 - Types any text: any language (including CJK without an IME), emoji, newlines and tabs
 - Adjustable speed (10–3000 characters per minute), changeable while typing
 - Random variation in the delay between keys, for a more natural rhythm
-- Extra pause after punctuation and newlines
+- Extra pause after punctuation and newlines (up to 20 s)
+- Optional pause after spaces (up to 20 s), with a chance setting so only some spaces pause
 - Countdown before typing starts, so you can switch to the target window
 - Global hotkeys: **F9** start / pause / resume, **F10** stop
 - Optional Shift+Enter for newlines, so chat apps don't send each line
